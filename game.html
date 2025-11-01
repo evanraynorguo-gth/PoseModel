@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pose Obstacle Game</title>
+<style>
+  body {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: linear-gradient(135deg, #f6d365, #fda085);
+    font-family: Arial, sans-serif;
+  }
+  #canvas {
+    border: 2px solid #333;
+    margin-top: 10px;
+    background: #fff;
+  }
+  #label-container {
+    margin-top: 10px;
+    font-size: 18px;
+    font-weight: bold;
+  }
+  #score {
+    font-size: 20px;
+    font-weight: bold;
+    margin-top: 10px;
+  }
+  button {
+    margin-top: 10px;
+    padding: 10px 20px;
+    font-size: 16px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<h1>Pose-Controlled Obstacle Game</h1>
+<button onclick="init()">Start Game</button>
+<canvas id="canvas" width="400" height="400"></canvas>
+<div id="label-container"></div>
+<div id="score">Score: 0</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+
+<script>
+const URL = "./my_model/";
+let model, webcam, ctx, labelContainer, maxPredictions;
+
+// Game variables
+let playerX = 175, playerY = 300, velocityY = 0;
+let obstacles = [], score = 0, gameOver = false;
+const canvas = document.getElementById("canvas");
+
+// Initialize everything
+async function init() {
+  const modelURL = URL + "model.json";
+  const metadataURL = URL + "metadata.json";
+  model = await tmPose.load(modelURL, metadataURL);
+  maxPredictions = model.getTotalClasses();
+
+  webcam = new tmPose.Webcam(400, 400, true);
+  await webcam.setup();
+  await webcam.play();
+  window.requestAnimationFrame(loop);
+
+  ctx = canvas.getContext("2d");
+  labelContainer = document.getElementById("label-container");
+  labelContainer.innerHTML = "";
+  for (let i = 0; i < maxPredictions; i++) {
+    labelContainer.appendChild(document.createElement("div"));
+  }
+
+  // Reset game state
+  playerX = 175;
+  playerY = 300;
+  velocityY = 0;
+  obstacles = [];
+  score = 0;
+  gameOver = false;
+
+  gameLoop();
+}
+
+// Pose detection loop
+async function loop() {
+  webcam.update();
+  await predict();
+  if (!gameOver) window.requestAnimationFrame(loop);
+}
+
+async function predict() {
+  const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+  const prediction = await model.predict(posenetOutput);
+
+  let detected = "None";
+
+  for (let i = 0; i < maxPredictions; i++) {
+    const classPrediction = prediction[i].className + ": " + prediction[i].probability.toFixed(2);
+    labelContainer.childNodes[i].innerHTML = classPrediction;
+
+    if (prediction[i].probability > 0.7) detected = prediction[i].className;
+  }
+
+  drawPose(pose);
+  handleGameAction(detected);
+}
+
+// Draw webcam + keypoints
+function drawPose(pose) {
+  ctx.drawImage(webcam.canvas, 0, 0);
+  if (pose) {
+    const minPartConfidence = 0.5;
+    tmPose.drawKeypoints(pose.keypoints, minPartConfidence, ctx);
+    tmPose.drawSkeleton(pose.keypoints, minPartConfidence, ctx);
+  }
+}
+
+// ----- Game logic -----
+function handleGameAction(detected) {
+  if (!detected) return;
+  if (detected === "Both") playerJump();
+  else if (detected === "Left") playerMoveLeft();
+  else if (detected === "Right") playerMoveRight();
+}
+
+function playerJump() {
+  if (playerY >= 300) velocityY = -15;
+}
+
+function playerMoveLeft() {
+  playerX -= 5;
+  if (playerX < 0) playerX = 0;
+}
+
+function playerMoveRight() {
+  playerX += 5;
+  if (playerX > canvas.width - 50) playerX = canvas.width - 50;
+}
+
+// ----- Game Loop -----
+function gameLoop() {
+  requestAnimationFrame(gameLoop);
+
+  if (gameOver) {
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "white";
+    ctx.font = "30px Arial";
+    ctx.fillText("Game Over!", 120, 200);
+    ctx.fillText("Score: " + score, 140, 240);
+    return;
+  }
+
+  // Gravity
+  velocityY += 1;
+  playerY += velocityY;
+  if (playerY > 300) {
+    playerY = 300;
+    velocityY = 0;
+  }
+
+  // Spawn obstacles
+  if (Math.random() < 0.02) {
+    obstacles.push({ x: Math.random() * 350, y: -20, width: 50, height: 20 });
+  }
+
+  // Update obstacles
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  obstacles.forEach((obs, index) => {
+    obs.y += 4;
+    ctx.fillStyle = "blue";
+    ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+
+    // Collision detection
+    if (
+      playerX < obs.x + obs.width &&
+      playerX + 50 > obs.x &&
+      playerY < obs.y + obs.height &&
+      playerY + 50 > obs.y
+    ) {
+      gameOver = true;
+    }
+
+    // Remove offscreen obstacles
+    if (obs.y > canvas.height) {
+      obstacles.splice(index, 1);
+      score++;
+      document.getElementById("score").innerText = "Score: " + score;
+    }
+  });
+
+  // Draw player
+  ctx.fillStyle = "red";
+  ctx.fillRect(playerX, playerY, 50, 50);
+}
+</script>
+</body>
+</html>
